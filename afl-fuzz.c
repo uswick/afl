@@ -55,6 +55,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
+#include "afl-fuzzserver.h"
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -102,6 +103,7 @@ EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
            force_deterministic,       /* Force deterministic stages?      */
            use_splicing,              /* Recombine input files?           */
            dumb_mode,                 /* Run in non-instrumented mode?    */
+           skip_add_auto,             /* Skip adding auto generated extras*/
            score_changed,             /* Scoring for favorites changed?   */
            kill_signal,               /* Signal that killed the child     */
            resuming_fuzz,             /* Resuming an older fuzzing job?   */
@@ -1336,7 +1338,6 @@ static void cull_queue(void) {
 
 }
 
-
 /* Configure shared memory and virgin_bits. This is called at startup. */
 
 EXP_ST void setup_shm(void) {
@@ -1348,6 +1349,7 @@ EXP_ST void setup_shm(void) {
   memset(virgin_tmout, 255, MAP_SIZE);
   memset(virgin_crash, 255, MAP_SIZE);
 
+#ifndef NO_BINARY_TARGET  
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
@@ -1368,6 +1370,14 @@ EXP_ST void setup_shm(void) {
   trace_bits = shmat(shm_id, NULL, 0);
   
   if (!trace_bits) PFATAL("shmat() failed");
+#else
+  int ret;
+  ret = posix_memalign((void**)&trace_bits, getpagesize(), MAP_SIZE);
+
+  if (ret || !trace_bits) PFATAL("posix_memalign() failed for trace map!");
+
+  /*memset(trace_bits, 0, MAP_SIZE);*/
+#endif /* NO_BINARY_TARGET */
 
 }
 
@@ -1965,6 +1975,7 @@ static void destroy_extras(void) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Spin up fork server (instrumented mode only). The idea is explained here:
 
    http://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html
@@ -2460,10 +2471,36 @@ static u8 run_target(char** argv, u32 timeout) {
 
 }
 
+#endif /* NO_BINARY_TARGET */
+
+/*
+  This function implements a server request/response loop = 2-way handshake
+  for AFL. it replaces standalone; write_to_testcase (i.e. target input) --> run_target sequence 
+  which may run when a binary target exists!
+
+Wait_Client_fuzz  
+  a) waits for an external request 
+  b) parse the request
+  c) sync fuzzed output
+  d) wait ack from client
+  3) finally continue
+             i.e. copy back to client
+ * */
+static u8 wait_client_copy_fuzzed(afl_server_cmd_t cmd, void* mem, u32 len) {
+  if(cmd == AFL_SERVER_INIT) {
+    barrier_afl_server(cmd);	
+  } else if (cmd == AFL_SERVER_NEXT) {
+    wait_afl_fuzz_ready(cmd);
+  }
+  return FAULT_NONE;
+}
+
 
 /* Write modified data to file for testing. If out_file is set, the old file
    is unlinked and a new one is created. Otherwise, out_fd is rewound and
    truncated. */
+
+#ifndef NO_BINARY_TARGET
 
 static void write_to_testcase(void* mem, u32 len) {
 
@@ -2521,6 +2558,7 @@ static void write_with_gap(void* mem, u32 len, u32 skip_at, u32 skip_len) {
 
 }
 
+#endif/* NO_BINARY_TARGET */
 
 static void show_stats(void);
 
@@ -2558,8 +2596,10 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   /* Make sure the forkserver is up before we do anything, and let's not
      count its spin-up time toward binary calibration. */
 
+#ifndef NO_BINARY_TARGET
   if (dumb_mode != 1 && !no_forkserver && !forksrv_pid)
     init_forkserver(argv);
+#endif
 
   if (q->exec_cksum) memcpy(first_trace, trace_bits, MAP_SIZE);
 
@@ -2571,9 +2611,12 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
 
     if (!first_run && !(stage_cur % stats_update_freq)) show_stats();
 
+#ifndef NO_BINARY_TARGET
     write_to_testcase(use_mem, q->len);
-
     fault = run_target(argv, use_tmout);
+#else
+    fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, use_mem, q->len);
+#endif
 
     /* stop_soon is set by the handler for Ctrl+C. When it's pressed,
        we want to bail out quickly. */
@@ -2857,7 +2900,11 @@ static void perform_dry_run(char** argv) {
 
       case FAULT_NOINST:
 
+#ifndef NO_BINARY_TARGET
         FATAL("No instrumentation detected");
+#else
+        WARNF("No instrumentation detected");
+#endif /*NO_BINARY_TARGET*/
 
       case FAULT_NOBITS: 
 
@@ -3202,8 +3249,13 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
       if (exec_tmout < hang_tmout) {
 
         u8 new_fault;
+
+#ifndef NO_BINARY_TARGET
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
+#else
+        new_fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, len);
+#endif
 
         /* A corner case that one user reported bumping into: increasing the
            timeout actually uncovers a crash. Make sure we don't discard it if
@@ -4502,9 +4554,14 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       u32 trim_avail = MIN(remove_len, q->len - remove_pos);
       u32 cksum;
 
+#ifndef NO_BINARY_TARGET
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
-
       fault = run_target(argv, exec_tmout);
+#else
+      // TODO fix for TRIM case
+      fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, in_buf, q->len);
+#endif
+
       trim_execs++;
 
       if (stop_soon || fault == FAULT_ERROR) goto abort_trimming;
@@ -4595,9 +4652,12 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
 
   }
 
+#ifndef NO_BINARY_TARGET
   write_to_testcase(out_buf, len);
-
   fault = run_target(argv, exec_tmout);
+#else
+  fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, out_buf, len);
+#endif 
 
   if (stop_soon) return 1;
 
@@ -5147,7 +5207,7 @@ static u8 fuzz_one(char** argv) {
 
       */
 
-    if (!dumb_mode && (stage_cur & 7) == 7) {
+    if (!skip_add_auto && !dumb_mode && (stage_cur & 7) == 7) {
 
       u32 cksum = hash32(trace_bits, MAP_SIZE, HASH_CONST);
 
@@ -6724,9 +6784,12 @@ static void sync_fuzzers(char** argv) {
         /* See what happens. We rely on save_if_interesting() to catch major
            errors and save the test case. */
 
+#ifndef NO_BINARY_TARGET
         write_to_testcase(mem, st.st_size);
-
         fault = run_target(argv, exec_tmout);
+#else
+        fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, st.st_size);
+#endif
 
         if (stop_soon) return;
 
@@ -6798,6 +6861,7 @@ static void handle_timeout(int sig) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Do a PATH search and find target binary to see that it exists and
    isn't a shell script - a common and painful mistake. We also check for
    a valid ELF header and for evidence of AFL instrumentation. */
@@ -6966,6 +7030,7 @@ EXP_ST void check_binary(u8* fname) {
 
 }
 
+#endif /* NO_BINARY_TARGET*/
 
 /* Trim and possibly create a banner for the run. */
 
@@ -7682,6 +7747,7 @@ static void save_cmdline(u32 argc, char** argv) {
     len += strlen(argv[i]) + 1;
   
   buf = orig_cmdline = ck_alloc(len);
+  *buf = '\0';
 
   for (i = 0; i < argc; i++) {
 
@@ -7699,9 +7765,262 @@ static void save_cmdline(u32 argc, char** argv) {
 }
 
 
-#ifndef AFL_LIB
+/* Main entry point 
+ *
+ * We want to make a compact version of AFL that is driven by an
+ * external clients --> accepts commands from a client and produces
+ * fuzzed input + we don't need verbose UI output (no_tty)
+ *
+ * client may process fuzzed input in a different way
+ *   i.e. other than file (@@) or stdin input
+ *
+ * */
 
-/* Main entry point */
+int init_afl_server(afl_server_config_t *config){
+  
+  s32 opt;
+  u64 prev_queued = 0;
+  u32 sync_interval_cnt = 0, seek_to;
+  u8  *extras_dir = 0;
+  u8  mem_limit_given = 0;
+  u8  exit_1 = !!getenv("AFL_BENCH_JUST_ONE");
+  char** use_argv;
+
+  struct timeval tv;
+  struct timezone tz;
+
+  SAYF(cCYA "afl-fuzz init() " cBRI VERSION cRST " by <lcamtuf@google.com>\n");
+
+  /*doc_path = access(DOC_PATH, F_OK) ? "docs" : DOC_PATH;*/
+
+  gettimeofday(&tv, &tz);
+  srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
+
+  // set basic params
+  // all other static variables initialized to zero
+  // we want to keep it that way
+  in_dir = config->input_dir;
+  out_dir = config->output_dir;
+  // we don't support dumb mode
+  dumb_mode = config->dumb_mode;
+  not_on_tty = config->not_on_tty;
+  skip_add_auto = 1;
+  sync_id = NULL;
+  if (config->afl_no_cpu_red)    no_cpu_meter_red = 1;
+  if (config->afl_no_arith)      no_arith         = 1;
+  if (config->afl_shuffle_q)     shuffle_queue    = 1;
+  if (config->afl_fast_calc)     fast_cal         = 1;
+
+
+  if (!in_dir || !out_dir) usage("afl-fuzz (server)");
+
+  // don't won't signal handlers in AFL server
+  //setup_signal_handlers();
+  //check_asan_opts();
+  if (sync_id) fix_up_sync();
+
+  if (!strcmp(in_dir, out_dir))
+    FATAL("Input and output directories can't be the same");
+
+  /*
+  if (dumb_mode) {
+
+    if (crash_mode) FATAL("-C and -n are mutually exclusive");
+    if (qemu_mode)  FATAL("-Q and -n are mutually exclusive");
+
+  }*/
+
+  /*if (getenv("AFL_NO_FORKSRV"))    no_forkserver    = 1;*/
+  /*
+  if (getenv("AFL_HANG_TMOUT")) {
+    hang_tmout = atoi(getenv("AFL_HANG_TMOUT"));
+    if (!hang_tmout) FATAL("Invalid value of AFL_HANG_TMOUT");
+  }
+
+  if (dumb_mode == 2 && no_forkserver)
+    FATAL("AFL_DUMB_FORKSRV and AFL_NO_FORKSRV are mutually exclusive");
+
+  if (getenv("AFL_PRELOAD")) {
+    setenv("LD_PRELOAD", getenv("AFL_PRELOAD"), 1);
+    setenv("DYLD_INSERT_LIBRARIES", getenv("AFL_PRELOAD"), 1);
+  }
+
+  if (getenv("AFL_LD_PRELOAD"))
+    FATAL("Use AFL_PRELOAD instead of AFL_LD_PRELOAD");
+*/
+
+#ifndef NO_BINARY_TARGET 
+  save_cmdline(config->t_argc, config->t_argv);
+  detect_file_args(config->t_argv);
+#endif
+
+  fix_up_banner("afl-fuzz-run (server mode)");
+
+  // we disable terminal output
+  /*check_if_tty();*/
+
+  get_core_count();
+
+#ifdef HAVE_AFFINITY
+  bind_to_free_cpu();
+#endif /* HAVE_AFFINITY */
+
+  check_crash_handling();
+  check_cpu_governor();
+
+  /*setup_post();*/
+  setup_shm();
+  init_count_class16();
+
+  setup_dirs_fds();
+  read_testcases();
+  // We don't need auto dictionary discovery
+  //load_auto();
+  pivot_inputs();
+
+  // we dont require timeouts/extras
+  /*if (extras_dir) load_extras(extras_dir);*/
+
+  /*if (!timeout_given) find_timeout();*/
+
+
+#ifndef NO_BINARY_TARGET 
+  if (!out_file) setup_stdio_file();
+  check_binary(config->target_name);
+#endif
+
+  // pass name of the target binary
+  // if we are running in binary target mode
+
+  start_time = get_cur_time();
+
+  /*
+  if (qemu_mode)
+    use_argv = get_qemu_argv(argv[0], argv + optind, argc - optind);
+  else
+    use_argv = argv + optind;
+  */
+/*#ifndef NO_BINARY_TARGET */
+  perform_dry_run(&config->target_name);
+  cull_queue();
+  show_init_stats();
+/*#endif*/
+
+
+
+  seek_to = find_start_position();
+
+  write_stats_file(0, 0, 0);
+  /*save_auto();*/
+
+  if (stop_soon) goto stop_fuzzing;
+
+  /* Woop woop woop */
+
+  /*if (!not_on_tty) {*/
+    /*sleep(4);*/
+    /*start_time += 4000;*/
+    /*if (stop_soon) goto stop_fuzzing;*/
+  /*}*/
+
+  wait_client_copy_fuzzed(AFL_SERVER_INIT, 0, 0);
+
+  while (1) {
+
+    u8 skipped_fuzz;
+
+    cull_queue();
+
+    if (!queue_cur) {
+
+      queue_cycle++;
+      current_entry     = 0;
+      cur_skipped_paths = 0;
+      queue_cur         = queue;
+
+      while (seek_to) {
+        current_entry++;
+        seek_to--;
+        queue_cur = queue_cur->next;
+      }
+
+      show_stats();
+
+      if (not_on_tty) {
+        ACTF("Entering queue cycle %llu.", queue_cycle);
+        fflush(stdout);
+      }
+
+      /* If we had a full queue cycle with no new finds, try
+         recombination strategies next. */
+
+      if (queued_paths == prev_queued) {
+
+        if (use_splicing) cycles_wo_finds++; else use_splicing = 1;
+
+      } else cycles_wo_finds = 0;
+
+      prev_queued = queued_paths;
+
+      if (sync_id && queue_cycle == 1 && getenv("AFL_IMPORT_FIRST"))
+        sync_fuzzers(use_argv);
+
+    }
+
+    skipped_fuzz = fuzz_one(use_argv);
+
+    if (!stop_soon && sync_id && !skipped_fuzz) {
+      
+      if (!(sync_interval_cnt++ % SYNC_INTERVAL))
+        sync_fuzzers(use_argv);
+
+    }
+
+    if (!stop_soon && exit_1) stop_soon = 2;
+
+    if (stop_soon) break;
+
+    queue_cur = queue_cur->next;
+    current_entry++;
+
+  }
+
+  if (queue_cur) show_stats();
+
+  write_bitmap();
+  write_stats_file(0, 0, 0);
+  /*save_auto();*/
+
+stop_fuzzing:
+
+  SAYF(CURSOR_SHOW cLRD "\n\n+++ Testing aborted %s +++\n" cRST,
+       stop_soon == 2 ? "programmatically" : "by user");
+
+  /* Running for more than 30 minutes but still doing first cycle? */
+
+  if (queue_cycle == 1 && get_cur_time() - start_time > 30 * 60 * 1000) {
+
+    SAYF("\n" cYEL "[!] " cRST
+           "Stopped during the first cycle, results may be incomplete.\n"
+           "    (For info on resuming, see %s/README.)\n", doc_path);
+
+  }
+
+  fclose(plot_file);
+  destroy_queue();
+  destroy_extras();
+  ck_free(target_path);
+  ck_free(sync_id);
+
+  alloc_report();
+
+  OKF("We're done here. Have a nice day!\n");
+
+  exit(0);
+  return 0;
+}
+
+#ifndef AFL_LIB
 
 int main(int argc, char** argv) {
 

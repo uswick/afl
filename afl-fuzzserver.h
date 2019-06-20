@@ -31,19 +31,19 @@ typedef enum {
 /*
  * entry point for starting AFL server
  * */
-int init_afl_server(afl_server_config_t *config);
+extern int init_afl_server(afl_server_config_t *config);
 
 u8* get_afl_fuzzed();
 /*
  * let an AFL client know that fuzzed output is ready for consumption
  * And also waits until end of client target completion
  * */
-int wait_afl_fuzz_ready(afl_server_cmd_t cmd);
+extern int wait_afl_fuzz_ready(afl_server_cmd_t cmd);
 
 /*
  *  wait until AFL server and client are
  *  in lockstep
  * * */
-int barrier_afl_server(afl_server_cmd_t cmd);
+extern int barrier_afl_server(afl_server_cmd_t cmd);
 
 #endif

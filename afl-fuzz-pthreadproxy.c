@@ -32,6 +32,7 @@ static u8 wait_client_copy_fuzzed(afl_server_cmd_t cmd, void* mem, u32 len) {
   return 0;
 }
 
+/*
 int init_afl_server(afl_server_config_t *config){
   printf("initializing afl-server\n");
   fflush(stdout);
@@ -45,6 +46,7 @@ int init_afl_server(afl_server_config_t *config){
   }
   return 0;
 }
+*/
 
 void* server_thread(void*  arg){
   int ret;
@@ -65,6 +67,11 @@ int init_server(){
      goto exit_server;
    }
    
+   aflGlobalConf.input_dir = "/mytrees/myafl/afl/test_in";
+   aflGlobalConf.output_dir = "/mytrees/myafl/afl/test_out";
+   aflGlobalConf.target_name = "test-afl-server";
+   aflGlobalConf.not_on_tty = 1;
+
    pthread_create(&server_th, NULL, server_thread, &aflGlobalConf);  
    init_done = 1;
   }
@@ -75,6 +82,7 @@ exit_server:
 int barrier_afl_server(afl_server_cmd_t cmd){
   sem_wait(&sem_wait_clientreq);
   sem_post(&sem_wait_runfuzzed);
+  return 0;
 }
 
 int wait_afl_fuzz_ready(afl_server_cmd_t cmd){
@@ -82,6 +90,7 @@ int wait_afl_fuzz_ready(afl_server_cmd_t cmd){
   barrier_afl_server(cmd);
   // wait for client completion
   barrier_afl_server(cmd);
+  return 0;
 }
 
 /******************************
@@ -92,11 +101,12 @@ int wait_afl_fuzz_ready(afl_server_cmd_t cmd){
 static int barrier_afl_client(){
   sem_post(&sem_wait_clientreq);
   sem_wait(&sem_wait_runfuzzed);
+  return 0;
 }
 
 static void fuzzer_init(){
   int ret;
-  printf("Initialized the fuzzer\n");
+  printf("Initializing the AFL fuzzer\n");
   ret = init_server();	
   
   // signal barrier
@@ -162,13 +172,13 @@ static void fuzzer_next() {
  * */
 int main(int argc, char *argv[])
 {
-  int i = 10;
+  int i = 100;
   int ret = 0;
   fuzzer_init();
 
   while(i--){
     fuzzer_next();	  
-    sleep(10);
+    sleep(3);
   }
 
   fuzzer_exit();

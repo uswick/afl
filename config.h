@@ -23,6 +23,9 @@
 
 #define VERSION             "2.52b"
 
+
+#define NO_BINARY_TARGET 1
+#define AFL_LIB 	 1
 /******************************************************
  *                                                    *
  *  Settings that may be of interest to power users:  *
