@@ -33,6 +33,9 @@ typedef enum {
  * */
 extern int init_afl_server(afl_server_config_t *config);
 
+int init_server(afl_server_config_t *conf);
+int exit_server();
+
 u8* get_afl_fuzzed();
 /*
  * let an AFL client know that fuzzed output is ready for consumption
@@ -45,5 +48,7 @@ extern int wait_afl_fuzz_ready(afl_server_cmd_t cmd);
  *  in lockstep
  * * */
 extern int barrier_afl_server(afl_server_cmd_t cmd);
+
+int barrier_afl_client();
 
 #endif
