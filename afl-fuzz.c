@@ -55,7 +55,12 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/file.h>
+
+#ifdef AFL_LIB
 #include "afl-fuzzserver.h"
+
+static afl_server_config_t  *serverConf;
+#endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
@@ -1371,10 +1376,11 @@ EXP_ST void setup_shm(void) {
   
   if (!trace_bits) PFATAL("shmat() failed");
 #else
-  int ret;
-  ret = posix_memalign((void**)&trace_bits, getpagesize(), MAP_SIZE);
+  trace_bits = serverConf->trace_map;
+  /*int ret;*/
+  /*ret = posix_memalign((void**)&trace_bits, getpagesize(), MAP_SIZE);*/
 
-  if (ret || !trace_bits) PFATAL("posix_memalign() failed for trace map!");
+  /*if (ret || !trace_bits) PFATAL("posix_memalign() failed for trace map!");*/
 
   /*memset(trace_bits, 0, MAP_SIZE);*/
 #endif /* NO_BINARY_TARGET */
@@ -2471,8 +2477,7 @@ static u8 run_target(char** argv, u32 timeout) {
 
 }
 
-#endif /* NO_BINARY_TARGET */
-
+#else
 /*
   This function implements a server request/response loop = 2-way handshake
   for AFL. it replaces standalone; write_to_testcase (i.e. target input) --> run_target sequence 
@@ -2494,6 +2499,8 @@ static u8 wait_client_copy_fuzzed(afl_server_cmd_t cmd, void* mem, u32 len) {
   }
   return FAULT_NONE;
 }
+
+#endif /* NO_BINARY_TARGET */
 
 
 /* Write modified data to file for testing. If out_file is set, the old file
@@ -2615,6 +2622,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     write_to_testcase(use_mem, q->len);
     fault = run_target(argv, use_tmout);
 #else
+    /*ACTF("============ wait for client #calibrate_case");*/
     fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, use_mem, q->len);
 #endif
 
@@ -3167,12 +3175,14 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   u8  hnb;
   s32 fd;
   u8  keeping = 0, res;
+  /*ACTF("================ SAVE if interesting? f=%d cmode=%d!!", fault, crash_mode);*/
 
   if (fault == crash_mode) {
 
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
+    /*ACTF("================ SAVE if interesting fault == crash_mode == %d !!", crash_mode);*/
     if (!(hnb = has_new_bits(virgin_bits))) {
       if (crash_mode) total_crashes++;
       return 0;
@@ -3189,6 +3199,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
+    /*ACTF("================Added new test case to queue!!");*/
     add_to_queue(fn, len, 0);
 
     if (hnb == 2) {
@@ -3254,6 +3265,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
 #else
+        /*ACTF("============ wait for client #save_if_interesting");*/
         new_fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, len);
 #endif
 
@@ -4559,6 +4571,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       fault = run_target(argv, exec_tmout);
 #else
       // TODO fix for TRIM case
+      /*ACTF("============ wait for client #trim_case");*/
       fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, in_buf, q->len);
 #endif
 
@@ -4656,6 +4669,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
   fault = run_target(argv, exec_tmout);
 #else
+  /*ACTF("============ wait for client #common_fuzz_stuff");*/
   fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, out_buf, len);
 #endif 
 
@@ -4742,8 +4756,10 @@ static u32 choose_block_len(u32 limit) {
 
 static u32 calculate_score(struct queue_entry* q) {
 
-  u32 avg_exec_us = total_cal_us / total_cal_cycles;
-  u32 avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
+  u32 avg_exec_us = 0;
+  if (total_cal_cycles) avg_exec_us = total_cal_us / total_cal_cycles;
+  u32 avg_bitmap_size = 0;
+  if (total_bitmap_entries) avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
   u32 perf_score = 100;
 
   /* Adjust score based on execution speed of this path, compared to the
@@ -5083,7 +5099,11 @@ static u8 fuzz_one(char** argv) {
 
   if (queue_cur->cal_failed) {
 
+#ifndef NO_BINARY_TARGET 
     u8 res = FAULT_TMOUT;
+#else
+    u8 res = FAULT_NONE;
+#endif
 
     if (queue_cur->cal_failed < CAL_CHANCES) {
 
@@ -6788,6 +6808,7 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
         fault = run_target(argv, exec_tmout);
 #else
+        /*ACTF("============ wait for client #sync_fuzzers");*/
         fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, st.st_size);
 #endif
 
@@ -7765,6 +7786,11 @@ static void save_cmdline(u32 argc, char** argv) {
 }
 
 
+#ifdef AFL_LIB
+
+unsigned long get_afl_map_size(){
+  return MAP_SIZE;
+}
 /* Main entry point 
  *
  * We want to make a compact version of AFL that is driven by an
@@ -7810,8 +7836,11 @@ int init_afl_server(afl_server_config_t *config){
   if (config->afl_no_arith)      no_arith         = 1;
   if (config->afl_shuffle_q)     shuffle_queue    = 1;
   if (config->afl_fast_calc)     fast_cal         = 1;
+  serverConf = config;
 
-
+  if(!config->trace_map){
+    PFATAL("afl-fuzz (server) trace map not provided!");
+  }
   if (!in_dir || !out_dir) usage("afl-fuzz (server)");
 
   // don't won't signal handlers in AFL server
@@ -8020,7 +8049,7 @@ stop_fuzzing:
   return 0;
 }
 
-#ifndef AFL_LIB
+#else /* !AFL_LIB */
 
 int main(int argc, char** argv) {
 
