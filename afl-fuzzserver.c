@@ -1,17 +1,37 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include "types.h"
 #include "afl-fuzzserver.h"
 
 volatile uint64_t val = 0;
+static afl_server_config_t aflGlobalConf;
+
+
+static void setupSHM(){
+  int ret;
+  ret = posix_memalign((void**)&aflGlobalConf.trace_map, getpagesize(), get_afl_map_size());
+
+  if (ret || !aflGlobalConf.trace_map) {
+    printf("posix_memalign() failed for trace map!");
+    exit(1);
+  }
+  memset(aflGlobalConf.trace_map, 0, get_afl_map_size());
+}
 
 static void fuzzer_init(){
-  int ret;
   printf("Initializing the AFL fuzzer\n");
-  ret = init_server(NULL);	
+
+  setupSHM();
+  aflGlobalConf.input_dir = "/mytrees/myafl/afl/test_in";
+  aflGlobalConf.output_dir = "/mytrees/myafl/afl/test_out";
+  aflGlobalConf.target_name = "test-afl-server";
+  aflGlobalConf.not_on_tty = 1;
+
+  init_server(&aflGlobalConf);	
   
   // signal barrier
   // make sure initialization is completed

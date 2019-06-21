@@ -12,7 +12,7 @@
 #include "alloc-inl.h"
 #include "afl-fuzzserver.h"
 
-static afl_server_config_t aflGlobalConf;
+/*static afl_server_config_t aflGlobalConf;*/
 static bool init_done = 0;
 static sem_t sem_wait_clientreq; 
 static sem_t sem_wait_runfuzzed; 
@@ -47,9 +47,8 @@ int init_afl_server(afl_server_config_t *config){
 */
 
 void* server_thread(void*  arg){
-  int ret;
   afl_server_config_t *conf = arg;
-  ret = init_afl_server(conf);
+  init_afl_server(conf);
   return NULL;
 }
 
@@ -58,19 +57,26 @@ int init_server(afl_server_config_t *conf){
   // only create one server thread
   if(!init_done){
    ret = sem_init(&sem_wait_clientreq, 0, 0);
+   if(ret){
+     WARNF("AFL Server #init(). Unable to setup sync");
+     ret = 1;
+     sem_destroy(&sem_wait_clientreq);
+     goto exit_server;
+   }
    ret = sem_init(&sem_wait_runfuzzed, 0, 0);
    if(ret){
      WARNF("AFL Server #init(). Unable to setup sync");
      ret = 1;
+     sem_destroy(&sem_wait_runfuzzed);
      goto exit_server;
    }
    
-   aflGlobalConf.input_dir = "/mytrees/myafl/afl/test_in";
-   aflGlobalConf.output_dir = "/mytrees/myafl/afl/test_out";
-   aflGlobalConf.target_name = "test-afl-server";
-   aflGlobalConf.not_on_tty = 1;
-
-   pthread_create(&server_th, NULL, server_thread, &aflGlobalConf);  
+   ret = pthread_create(&server_th, NULL, server_thread, conf);  
+   if(ret){
+     WARNF("AFL Server #init(). Unable to setup server");
+     ret = 1;
+     goto exit_server;
+   }
    init_done = 1;
   }
 exit_server:
@@ -79,7 +85,12 @@ exit_server:
 
 
 int exit_server(){
-  pthread_cancel(server_th);
+  if(init_done){
+    pthread_cancel(server_th);
+    sem_destroy(&sem_wait_clientreq);
+    sem_destroy(&sem_wait_runfuzzed);
+  }
+  return init_done;
 }
 
 int barrier_afl_server(afl_server_cmd_t cmd){

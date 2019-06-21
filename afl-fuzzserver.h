@@ -2,6 +2,7 @@
 #define __H_AFL_FUZZ_PROXY__H__
 
 typedef struct afl_server_config {
+  char *trace_map;
   char *input_dir;
   char *output_dir;
   char *target_name;
@@ -36,7 +37,7 @@ extern int init_afl_server(afl_server_config_t *config);
 int init_server(afl_server_config_t *conf);
 int exit_server();
 
-u8* get_afl_fuzzed();
+unsigned long get_afl_map_size();
 /*
  * let an AFL client know that fuzzed output is ready for consumption
  * And also waits until end of client target completion
