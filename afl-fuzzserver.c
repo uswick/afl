@@ -4,10 +4,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <assert.h>
 #include "types.h"
 #include "afl-fuzzserver.h"
 
-volatile uint64_t val = 0;
 static afl_server_config_t aflGlobalConf;
 
 
@@ -59,20 +59,25 @@ static void fuzzer_next() {
     barrier_afl_client();
   }
   client_target_comp = true;
-  printf("Next the fuzzer input is : %lu\n", val);
+  printf("Next the fuzzer input ; AFL MAP_SIZE : %lu\n", get_afl_map_size());
   fflush(stdout);
   // do some stuff
 }
 
+void emulateTraceCov(){
+  assert(aflGlobalConf.trace_map);
+  aflGlobalConf.trace_map[R(get_afl_map_size())]++;
+}
 
 int main(int argc, char *argv[])
 {
-  int i = 100;
+  int i = 500;
   int ret = 0;
   fuzzer_init();
 
   while(i--){
     fuzzer_next();	  
+    emulateTraceCov();
     sleep(3);
   }
 

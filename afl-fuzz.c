@@ -66,6 +66,8 @@ static afl_server_config_t  *serverConf;
 #  include <sys/sysctl.h>
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
 
+
+#include "overridesysf.h"
 /* For systems that have sched_setaffinity; right now just Linux, but one
    can hope... */
 
@@ -133,13 +135,17 @@ EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
 
 static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
-           dev_null_fd = -1,          /* Persistent fd for /dev/null      */
-           fsrv_ctl_fd,               /* Fork server control pipe (write) */
+           dev_null_fd = -1;          /* Persistent fd for /dev/null      */
+
+#ifndef NO_BINARY_TARGET
+static s32 fsrv_ctl_fd,               /* Fork server control pipe (write) */
            fsrv_st_fd;                /* Fork server status pipe (read)   */
 
 static s32 forksrv_pid,               /* PID of the fork server           */
-           child_pid = -1,            /* PID of the fuzzed program        */
-           out_dir_fd = -1;           /* FD of the lock file              */
+           child_pid = -1;            /* PID of the fuzzed program        */
+#endif
+
+static s32 out_dir_fd = -1;           /* FD of the lock file              */
 
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
@@ -149,7 +155,9 @@ EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
+#ifndef NO_BINARY_TARGET
 static s32 shm_id;                    /* ID of the SHM region             */
+#endif
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -1203,6 +1211,7 @@ static inline void classify_counts(u32* mem) {
 #endif /* ^__x86_64__ */
 
 
+#ifndef NO_BINARY_TARGET  
 /* Get rid of shared memory (atexit handler). */
 
 static void remove_shm(void) {
@@ -1210,6 +1219,7 @@ static void remove_shm(void) {
   shmctl(shm_id, IPC_RMID, NULL);
 
 }
+#endif
 
 
 /* Compact trace bytes into a smaller bitmap. We effectively just drop the
@@ -1347,7 +1357,6 @@ static void cull_queue(void) {
 
 EXP_ST void setup_shm(void) {
 
-  u8* shm_str;
 
   if (!in_bitmap) memset(virgin_bits, 255, MAP_SIZE);
 
@@ -1355,6 +1364,7 @@ EXP_ST void setup_shm(void) {
   memset(virgin_crash, 255, MAP_SIZE);
 
 #ifndef NO_BINARY_TARGET  
+  u8* shm_str;
   shm_id = shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);
 
   if (shm_id < 0) PFATAL("shmget() failed");
@@ -1388,6 +1398,7 @@ EXP_ST void setup_shm(void) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Load postprocessor, if available. */
 
 static void setup_post(void) {
@@ -1413,7 +1424,7 @@ static void setup_post(void) {
   OKF("Postprocessor installed successfully.");
 
 }
-
+#endif
 
 /* Read all testcases from the input directory, then queue them for testing.
    Called at startup. */
@@ -1536,6 +1547,7 @@ static int compare_extras_use_d(const void* p1, const void* p2) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Read extras from a file, sort by size. */
 
 static void load_extras_file(u8* fname, u32* min_len, u32* max_len,
@@ -1772,7 +1784,7 @@ check_and_sort:
 
 }
 
-
+#endif /*NO_BINARY_TARGET*/
 
 
 /* Helper function for maybe_add_auto() */
@@ -1918,7 +1930,25 @@ static void save_auto(void) {
 
 }
 
+/* Destroy extras. */
 
+static void destroy_extras(void) {
+
+  u32 i;
+
+  for (i = 0; i < extras_cnt; i++) 
+    ck_free(extras[i].data);
+
+  ck_free(extras);
+
+  for (i = 0; i < a_extras_cnt; i++) 
+    ck_free(a_extras[i].data);
+
+  ck_free(a_extras);
+
+}
+
+#ifndef NO_BINARY_TARGET
 /* Load automatically generated extras. */
 
 static void load_auto(void) {
@@ -1962,26 +1992,8 @@ static void load_auto(void) {
 }
 
 
-/* Destroy extras. */
-
-static void destroy_extras(void) {
-
-  u32 i;
-
-  for (i = 0; i < extras_cnt; i++) 
-    ck_free(extras[i].data);
-
-  ck_free(extras);
-
-  for (i = 0; i < a_extras_cnt; i++) 
-    ck_free(a_extras[i].data);
-
-  ck_free(a_extras);
-
-}
 
 
-#ifndef NO_BINARY_TARGET
 /* Spin up fork server (instrumented mode only). The idea is explained here:
 
    http://lcamtuf.blogspot.com/2014/10/fuzzing-binaries-without-execve.html
@@ -2584,9 +2596,10 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   u64 start_us, stop_us;
 
   s32 old_sc = stage_cur, old_sm = stage_max;
-  u32 use_tmout = exec_tmout;
   u8* old_sn = stage_name;
 
+#ifndef NO_BINARY_TARGET
+  u32 use_tmout = exec_tmout;
   /* Be a bit more generous about timeouts when resuming sessions, or when
      trying to calibrate already-added finds. This helps avoid trouble due
      to intermittent latency. */
@@ -2594,6 +2607,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
   if (!from_queue || resuming_fuzz)
     use_tmout = MAX(exec_tmout + CAL_TMOUT_ADD,
                     exec_tmout * CAL_TMOUT_PERC / 100);
+#endif
 
   q->cal_failed++;
 
@@ -2622,7 +2636,7 @@ static u8 calibrate_case(char** argv, struct queue_entry* q, u8* use_mem,
     write_to_testcase(use_mem, q->len);
     fault = run_target(argv, use_tmout);
 #else
-    /*ACTF("============ wait for client #calibrate_case");*/
+    ACTF("============ wait for client #calibrate_case");
     fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, use_mem, q->len);
 #endif
 
@@ -3175,14 +3189,14 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
   u8  hnb;
   s32 fd;
   u8  keeping = 0, res;
-  /*ACTF("================ SAVE if interesting? f=%d cmode=%d!!", fault, crash_mode);*/
+  ACTF("================ SAVE if interesting? f=%d cmode=%d!!", fault, crash_mode);
 
   if (fault == crash_mode) {
 
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
-    /*ACTF("================ SAVE if interesting fault == crash_mode == %d !!", crash_mode);*/
+    ACTF("================ SAVE if interesting fault == crash_mode == %d !!", crash_mode);
     if (!(hnb = has_new_bits(virgin_bits))) {
       if (crash_mode) total_crashes++;
       return 0;
@@ -3199,7 +3213,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
-    /*ACTF("================Added new test case to queue!!");*/
+    ACTF("================Added new test case to queue!!");
     add_to_queue(fn, len, 0);
 
     if (hnb == 2) {
@@ -3265,7 +3279,7 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
         write_to_testcase(mem, len);
         new_fault = run_target(argv, hang_tmout);
 #else
-        /*ACTF("============ wait for client #save_if_interesting");*/
+	ACTF("============ wait for client #save_if_interesting");
         new_fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, len);
 #endif
 
@@ -3397,6 +3411,7 @@ static u32 find_start_position(void) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* The same, but for timeouts. The idea is that when resuming sessions without
    -t given, we don't want to keep auto-scaling the timeout over and over
    again to prevent it from growing due to random flukes. */
@@ -3433,7 +3448,7 @@ static void find_timeout(void) {
 
 }
 
-
+#endif
 /* Update stats file for unattended monitoring. */
 
 static void write_stats_file(double bitmap_cvg, double stability, double eps) {
@@ -4571,7 +4586,7 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       fault = run_target(argv, exec_tmout);
 #else
       // TODO fix for TRIM case
-      /*ACTF("============ wait for client #trim_case");*/
+      ACTF("============ wait for client #trim_case");
       fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, in_buf, q->len);
 #endif
 
@@ -4669,7 +4684,7 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
   fault = run_target(argv, exec_tmout);
 #else
-  /*ACTF("============ wait for client #common_fuzz_stuff");*/
+  ACTF("============ wait for client #common_fuzz_stuff");
   fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, out_buf, len);
 #endif 
 
@@ -6808,7 +6823,7 @@ static void sync_fuzzers(char** argv) {
         write_to_testcase(mem, st.st_size);
         fault = run_target(argv, exec_tmout);
 #else
-        /*ACTF("============ wait for client #sync_fuzzers");*/
+	ACTF("============ wait for client #sync_fuzzers");
         fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, mem, st.st_size);
 #endif
 
@@ -6843,6 +6858,7 @@ static void sync_fuzzers(char** argv) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Handle stop signal (Ctrl-C, etc). */
 
 static void handle_stop_sig(int sig) {
@@ -6882,7 +6898,6 @@ static void handle_timeout(int sig) {
 }
 
 
-#ifndef NO_BINARY_TARGET
 /* Do a PATH search and find target binary to see that it exists and
    isn't a shell script - a common and painful mistake. We also check for
    a valid ELF header and for evidence of AFL instrumentation. */
@@ -7083,6 +7098,7 @@ static void fix_up_banner(u8* name) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Check if we're on TTY. */
 
 static void check_if_tty(void) {
@@ -7107,6 +7123,7 @@ static void check_if_tty(void) {
 
 }
 
+#endif
 
 /* Check terminal dimensions after resize. */
 
@@ -7554,6 +7571,7 @@ static void fix_up_sync(void) {
 }
 
 
+#ifndef NO_BINARY_TARGET
 /* Handle screen resize (SIGWINCH). */
 
 static void handle_resize(int sig) {
@@ -7683,7 +7701,6 @@ EXP_ST void setup_signal_handlers(void) {
 
 }
 
-
 /* Rewrite argv for QEMU. */
 
 static char** get_qemu_argv(u8* own_loc, char** argv, int argc) {
@@ -7785,6 +7802,8 @@ static void save_cmdline(u32 argc, char** argv) {
 
 }
 
+#endif /* !NO_BINARY_TARGET*/
+
 
 #ifdef AFL_LIB
 
@@ -7804,13 +7823,11 @@ unsigned long get_afl_map_size(){
 
 int init_afl_server(afl_server_config_t *config){
   
-  s32 opt;
   u64 prev_queued = 0;
   u32 sync_interval_cnt = 0, seek_to;
-  u8  *extras_dir = 0;
-  u8  mem_limit_given = 0;
+  /*u8  *extras_dir = 0;*/
   u8  exit_1 = !!getenv("AFL_BENCH_JUST_ONE");
-  char** use_argv;
+  char** use_argv = NULL;
 
   struct timeval tv;
   struct timezone tz;
