@@ -14,9 +14,9 @@
 
 static afl_server_config_t aflGlobalConf;
 static bool init_done = 0;
-sem_t sem_wait_clientreq; 
-sem_t sem_wait_runfuzzed; 
-pthread_t server_th;
+static sem_t sem_wait_clientreq; 
+static sem_t sem_wait_runfuzzed; 
+static pthread_t server_th;
 
 
 /*
