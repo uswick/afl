@@ -75,8 +75,8 @@ afl-as: afl-as.c afl-as.h $(COMM_HDR) | test_x86
 afl-fuzz: afl-fuzz.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
 
-afl-fuzzserver: afl-fuzz.c afl-fuzz-pthreadproxy.c $(COMM_HDR) | test_x86
-	$(CC) $(CFLAGS) afl-fuzz-pthreadproxy.c afl-fuzz.c  -o $@ $(LDFLAGS) -lpthread
+afl-fuzzserver: afl-fuzz.c afl-fuzz-pthread.c $(COMM_HDR) | test_x86
+	$(CC) $(CFLAGS) $@.c afl-fuzz.c  afl-fuzz-pthread.c -o $@ $(LDFLAGS) -lpthread
 
 afl-showmap: afl-showmap.c $(COMM_HDR) | test_x86
 	$(CC) $(CFLAGS) $@.c -o $@ $(LDFLAGS)
