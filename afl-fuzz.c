@@ -41,7 +41,6 @@
 #include <signal.h>
 #include <dirent.h>
 #include <ctype.h>
-#include <fcntl.h>
 #include <termios.h>
 #include <dlfcn.h>
 #include <sched.h>
@@ -49,25 +48,28 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <sys/shm.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+
 #include <sys/types.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
-#include <sys/ioctl.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 
 #ifdef AFL_LIB
 #include "afl-fuzzserver.h"
+#include "overridesysf.h"
 
 static afl_server_config_t  *serverConf;
 #endif
+
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined (__OpenBSD__)
 #  include <sys/sysctl.h>
 #endif /* __APPLE__ || __FreeBSD__ || __OpenBSD__ */
 
 
-#include "overridesysf.h"
 /* For systems that have sched_setaffinity; right now just Linux, but one
    can hope... */
 
@@ -4772,10 +4774,10 @@ static u32 choose_block_len(u32 limit) {
 static u32 calculate_score(struct queue_entry* q) {
 
   u32 avg_exec_us = 0;
-  if (total_cal_cycles) avg_exec_us = total_cal_us / total_cal_cycles;
   u32 avg_bitmap_size = 0;
-  if (total_bitmap_entries) avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
   u32 perf_score = 100;
+  if (total_cal_cycles) avg_exec_us = total_cal_us / total_cal_cycles;
+  if (total_bitmap_entries) avg_bitmap_size = total_bitmap_size / total_bitmap_entries;
 
   /* Adjust score based on execution speed of this path, compared to the
      global average. Multiplier ranges from 0.1x to 3x. Fast inputs are
