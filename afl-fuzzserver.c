@@ -36,7 +36,7 @@ static void fuzzer_init(){
   // signal barrier
   // make sure initialization is completed
   // properly before the first run
-  barrier_afl_client();
+  /*barrier_afl_client();*/
 }
 
 static void fuzzer_exit(){
@@ -78,7 +78,7 @@ int main(int argc, char *argv[])
   while(i--){
     fuzzer_next();	  
     emulateTraceCov();
-    sleep(3);
+    /*sleep(3);*/
   }
 
   fuzzer_exit();

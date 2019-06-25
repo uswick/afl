@@ -30,7 +30,19 @@
 #include "types.h"
 #include "debug.h"
 
+#define MAX_SPRINTF_LEN 500
 /* User-facing macro to sprintf() to a dynamically allocated buffer. */
+
+#ifdef AFL_LIB
+#define alloc_printf(_str...) ({ \
+    u8* _tmp; \
+    s32 _len = MAX_SPRINTF_LEN;\
+    _tmp = ck_alloc(_len + 1); \
+    snprintf((char*)_tmp, _len + 1, _str); \
+    _tmp; \
+  })
+
+#else
 
 #define alloc_printf(_str...) ({ \
     u8* _tmp; \
@@ -40,6 +52,8 @@
     snprintf((char*)_tmp, _len + 1, _str); \
     _tmp; \
   })
+
+#endif
 
 /* Macro to enforce allocation limits as a last-resort defense against
    integer overflows. */
