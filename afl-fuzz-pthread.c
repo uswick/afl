@@ -77,6 +77,7 @@ int init_server(afl_server_config_t *conf){
      ret = 1;
      goto exit_server;
    }
+   barrier_afl_client();
    init_done = 1;
   }
 exit_server:

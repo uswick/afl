@@ -406,6 +406,7 @@ static void shuffle_ptrs(void** ptrs, u32 cnt) {
 }
 
 
+#ifndef NO_BINARY_TARGET 
 #ifdef HAVE_AFFINITY
 
 /* Build a list of processes bound to specific cores. Returns -1 if nothing
@@ -521,6 +522,7 @@ static void bind_to_free_cpu(void) {
 }
 
 #endif /* HAVE_AFFINITY */
+#endif /* !NO_BINARY_TARGET*/
 
 #ifndef IGNORE_FINDS
 
@@ -7909,9 +7911,11 @@ int init_afl_server(afl_server_config_t *config){
 
   get_core_count();
 
+#ifndef NO_BINARY_TARGET 
 #ifdef HAVE_AFFINITY
   bind_to_free_cpu();
 #endif /* HAVE_AFFINITY */
+#endif
 
   check_crash_handling();
   check_cpu_governor();
@@ -7940,6 +7944,7 @@ int init_afl_server(afl_server_config_t *config){
   // pass name of the target binary
   // if we are running in binary target mode
 
+  wait_client_copy_fuzzed(AFL_SERVER_INIT, 0, 0);
   start_time = get_cur_time();
 
   /*
@@ -7963,15 +7968,6 @@ int init_afl_server(afl_server_config_t *config){
 
   if (stop_soon) goto stop_fuzzing;
 
-  /* Woop woop woop */
-
-  /*if (!not_on_tty) {*/
-    /*sleep(4);*/
-    /*start_time += 4000;*/
-    /*if (stop_soon) goto stop_fuzzing;*/
-  /*}*/
-
-  wait_client_copy_fuzzed(AFL_SERVER_INIT, 0, 0);
 
   while (1) {
 
