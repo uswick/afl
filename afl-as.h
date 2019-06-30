@@ -104,6 +104,8 @@
 
  */
 
+#define AFL_VHV_FUZZ 1
+
 static const u8* trampoline_fmt_32 =
 
   "\n"
@@ -139,6 +141,8 @@ static const u8* trampoline_fmt_64 =
   "movq %%rcx,  8(%%rsp)\n"
   "movq %%rax, 16(%%rsp)\n"
   "movq $0x%08x, %%rcx\n"
+  //"movq $0xbeef, %%rcx\n"
+  //"leaq __afl_maybe_log, %%rax\n"
   "call __afl_maybe_log\n"
   "movq 16(%%rsp), %%rax\n"
   "movq  8(%%rsp), %%rcx\n"
@@ -377,6 +381,8 @@ static const u8* main_payload_32 =
 #else
 #  define CALL_L64(str)		"call " str "@PLT\n"
 #endif /* ^__APPLE__ */
+
+#ifndef AFL_VHV_FUZZ
 
 static const u8* main_payload_64 = 
 
@@ -715,5 +721,53 @@ static const u8* main_payload_64 =
   "\n"
   "/* --- END --- */\n"
   "\n";
+
+#else /* [END] !AFL_VHV_FUZZ */
+
+static const u8* main_payload_64 = 
+
+  "\n"
+  "/* --- AFL MAIN PAYLOAD (64-BIT) --- */\n"
+  "\n"
+  ".text\n"
+  ".att_syntax\n"
+  ".code64\n"
+  ".align 8\n"
+  "\n"
+  "__afl_maybe_log:\n"
+  "\n"
+  "  /* load flags(except overflow) to AH reg.*/\n"
+  "  /* seto %al = load overflow flag to AL */\n"
+  "  /* we are not pushing rax since not used immediately */\n"
+  "  lahf\n"
+  "  seto  %al\n"
+  "\n"
+  "  /* Check if SHM region is already mapped. */\n"
+  "\n"
+  "  movq  AFLTraceUserVPN(%rip), %rdx\n"
+  "  testq %rdx, %rdx\n"
+  "  je    __afl_return\n"
+  "\n"
+  "  /* load shared memory area and then record hit count*/\n"
+  "  /* test-instr=0x601080 ; vmx_trace_map_va=0xfffffffffccaa000*/\n"
+  "__afl_store:\n"
+  //"  movq  $0x601080, %rdx\n"
+  "  movq  $0xfffffffffccaa000, %rdx\n"
+  "  incb (%rdx, %rcx, 1)\n"
+  "__afl_return:\n"
+  "\n"
+  "  /* restore overflow flag to AL */\n"
+  "  addb $127, %al\n"
+#if defined(__OpenBSD__)  || (defined(__FreeBSD__) && (__FreeBSD__ < 9))
+  "  .byte 0x9e /* sahf */\n"
+#else
+  "  sahf\n"
+#endif /* ^__OpenBSD__, etc */
+  "  ret\n"
+  "\n"
+  "/* --- END --- */\n"
+  "\n";
+
+#endif /* AFL_VHV_FUZZ */
 
 #endif /* !_HAVE_AFL_AS_H */
