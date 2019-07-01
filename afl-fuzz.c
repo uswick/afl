@@ -1510,6 +1510,7 @@ static void read_testcases(void) {
     if (!access(dfn, F_OK)) passed_det = 1;
     ck_free(dfn);
 
+    ACTF("############### READING Test Input...file=[%s] file_sz=[%ld]", fn, st.st_size);
     add_to_queue(fn, st.st_size, passed_det);
 
   }
@@ -2511,6 +2512,16 @@ static u8 wait_client_copy_fuzzed(afl_server_cmd_t cmd, void* mem, u32 len) {
   if(cmd == AFL_SERVER_INIT) {
     barrier_afl_server(cmd);	
   } else if (cmd == AFL_SERVER_NEXT) {
+
+    // copy out data
+    if(len <= serverConf->desc.max_sz) {
+      memcpy(serverConf->desc.buffer, mem, len);
+    } else {
+      WARNF("Fuzzed data exceeded max payload length for AFL client!");
+      memcpy(serverConf->desc.buffer, mem, serverConf->desc.max_sz);
+    }
+    memcpy(serverConf->desc.payload_sz, &len, sizeof(u32));
+    // sync
     wait_afl_fuzz_ready(cmd);
   }
   return FAULT_NONE;
@@ -3200,11 +3211,11 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
     /* Keep only if there are new bits in the map, add to queue for
        future fuzzing, etc. */
 
-    ACTF("================ SAVE if interesting fault == crash_mode == %d !!", crash_mode);
     if (!(hnb = has_new_bits(virgin_bits))) {
       if (crash_mode) total_crashes++;
       return 0;
     }    
+    ACTF("================ SAVE if interesting fault == crash_mode == %d !!", crash_mode);
 
 #ifndef SIMPLE_FILES
 
@@ -4589,9 +4600,14 @@ static u8 trim_case(char** argv, struct queue_entry* q, u8* in_buf) {
       write_with_gap(in_buf, q->len, remove_pos, trim_avail);
       fault = run_target(argv, exec_tmout);
 #else
+#define SKIP_TRIMMING_AFL_LIB 1
       // TODO fix for TRIM case
-      ACTF("============ wait for client #trim_case");
+      ACTF("============ wait for client #trim_case q=[%p] q->len=[%u] trim_done?[%d]", q, q->len, q->trim_done);
       fault = wait_client_copy_fuzzed(AFL_SERVER_NEXT, in_buf, q->len);
+#ifdef SKIP_TRIMMING_AFL_LIB
+      goto abort_trimming;
+#endif
+#undef SKIP_TRIMMING_AFL_LIB
 #endif
 
       trim_execs++;

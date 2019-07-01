@@ -1,8 +1,15 @@
 #ifndef __H_AFL_FUZZ_PROXY__H__
 #define __H_AFL_FUZZ_PROXY__H__
 
+typedef struct fuzz_desc {
+  char *buffer;
+  unsigned int  *payload_sz;
+  size_t max_sz;
+} fuzz_desc_t;
+
 typedef struct afl_server_config {
   char *trace_map;
+  fuzz_desc_t desc;
   char *input_dir;
   char *output_dir;
   char *target_name;
