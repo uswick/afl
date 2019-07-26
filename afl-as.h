@@ -744,16 +744,26 @@ static const u8* main_payload_64 =
   "\n"
   "  /* Check if SHM region is already mapped. */\n"
   "\n"
-  "  movq  AFLTraceUserVPN(%rip), %rdx\n"
+  //"  movq  AFLTraceUserVPN(%rip), %rdx\n"
+  "  movq  AFLTraceBitsInitialized(%rip), %rdx\n"
   "  testq %rdx, %rdx\n"
   "  je    __afl_return\n"
   "\n"
   "  /* load shared memory area and then record hit count*/\n"
   "  /* test-instr=0x601080 ; vmx_trace_map_va=0xfffffffffccaa000*/\n"
   "__afl_store:\n"
+#ifndef COVERAGE_ONLY
+  "  xorq AFLTracePrevLoc(%rip), %rcx\n"
+  "  xorq %rcx, AFLTracePrevLoc(%rip)\n"
+  "  shrq $1, AFLTracePrevLoc(%rip)\n"
+#endif /* ^!COVERAGE_ONLY */
   //"  movq  $0x601080, %rdx\n"
-  "  movq  $0xfffffffffccaa000, %rdx\n"
+  //"  movq  $0xfffffffffccaa000, %rdx\n"
+  "  movq  AFLTraceAreaLoc(%rip), %rdx\n"
+  //   HIT COUNTS
   "  incb (%rdx, %rcx, 1)\n"
+  //   SKIP COUNTS/ Logical OR ->
+  //"  orb  $1, (%rdx, %rcx, 1)\n"
   "__afl_return:\n"
   "\n"
   "  /* restore overflow flag to AL */\n"

@@ -1,7 +1,7 @@
 #ifndef __H_OVERRIDE_SYS_FUNCS_H__
 #define __H_OVERRIDE_SYS_FUNCS_H__
 
-#define _VMWARE_VMX_ 1
+//#define _VMWARE_VMX_ 1
 
 #ifndef _VMWARE_VMX_
 
